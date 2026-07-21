@@ -63,14 +63,63 @@ def log_event(service, ip, details=''):
 
 # Honeypot Protocols
 class SSHHoneypot(asyncio.Protocol):
+    def __init__(self):
+        self.transport = None
+        self.state = 'banner'
+        self.ip = 'unknown'
+        self.username = ''
+        self.input_buffer = b''
+        self.logged_in = False
+        self.prompt = b'pi@raspberrypi:~$ '
+
     def connection_made(self, transport):
+        self.transport = transport
         peername = transport.get_extra_info('peername')
-        ip = peername[0] if peername else 'unknown'
-        log_event('SSH', ip, 'Connection attempt')
-        # Send SSH banner
+        self.ip = peername[0] if peername else 'unknown'
+        log_event('SSH', self.ip, 'SSH connection start')
         transport.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\n')
-        # Close connection after banner (this is a banner-only honeypot)
-        transport.close()
+        # Real SSH expects exchange, but we skip to login, for safety
+        transport.write(b'login: ')
+        self.state = 'username'
+
+    def data_received(self, data):
+        self.input_buffer += data
+        # Handle line-by-line input
+        if b'\n' in self.input_buffer or b'\r' in self.input_buffer:
+            line = self.input_buffer.strip().decode(errors='ignore')
+            self.input_buffer = b''
+            if self.state == 'username':
+                self.username = line
+                self.transport.write(b'Password: ')
+                self.state = 'password'
+            elif self.state == 'password':
+                self.transport.write(b'\r\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.4.0-42-generic x86_64)\r\n')
+                self.transport.write(self.prompt)
+                self.state = 'shell'
+                self.logged_in = True
+                log_event('SSH', self.ip, f'Login as {self.username}')
+            elif self.state == 'shell':
+                log_event('SSH', self.ip, f'{self.username}$ {line}')
+                output = self.simulate_command(line)
+                self.transport.write(output + self.prompt)
+
+    def simulate_command(self, line):
+        cmds = {
+            'ls': b"Desktop  Downloads  Documents  Music  Pictures  Public\n",
+            'pwd': b"/home/pi\n",
+            'whoami': (self.username+"\n").encode(),
+            'id': b"uid=1000(pi) gid=1000(pi) groups=1000(pi)\n",
+            'cat flag.txt': b"flag{honeypot_example_flag}\n",
+            'uname -a': b"Linux raspberrypi 5.4.0-42-generic #1 SMP x86_64 GNU/Linux\n",
+            'exit': b"logout\n",
+            'help': b"ls pwd whoami id cat uname exit help\n",
+        }
+        output = cmds.get(line.strip(), b"bash: command not found\n")
+        if line.strip() == 'exit':
+            # End session
+            self.transport.write(b'Connection closed by remote host.\n')
+            self.transport.close()
+        return output
 
 class TelnetHoneypot(asyncio.Protocol):
     def connection_made(self, transport):

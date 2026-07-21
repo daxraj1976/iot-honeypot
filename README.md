@@ -1,114 +1,57 @@
-# Smart IoT Honeypot Using Raspberry Pi Pico W
+# Smart IoT Honeypot
 
-## Project Overview
-This is a low-cost IoT honeypot designed for threat analysis. It runs on a Raspberry Pi Pico W and emulates common network services. The honeypot safely logs unsolicited connection attempts and records attacker activity without providing actual access to services.
-
-### Features:
-- **Fake Servers** for SSH, Telnet, and FTP
-- **Logger** to track connection attempts (IP, service, time)
-- **Web Dashboard** to visualize attack data
+A safe, realistic SSH/Telnet/FTP honeypot for research or teaching—targeted for Linux (Python 3) or Raspberry Pi Pico W (MicroPython).
 
 ---
 
-## System Requirements
-
-### Hardware:
-- Raspberry Pi Pico W
-- Micro USB Cable
-
-### Software:
-- MicroPython or CircuitPython installed on the Pico
-- `Thonny` IDE on your computer
-
-#### Libraries:
-- `usocket`, `uasyncio`, `microdot` (install via Thonny if not preinstalled)
-- Networking functionality (preloaded into MicroPython)
+## Features
+- **SSH/Telnet/FTP fake servers** (banner only for Telnet/FTP, realistic *interactive* fake SSH shell)
+- **SQLite logging** with timestamps, IP, service, geo-info (Linux version)
+- **Web dashboard** (Flask, Linux version) to view attacks live at `http://localhost:5050`
 
 ---
 
-## File Structure
+## Quick Start (Linux / Pi)
 
-```
-honeypot/
-├── main.py
-├── fake_ssh_server.py
-├── fake_telnet_server.py
-├── fake_ftp_server.py
-├── web_dashboard.py
-└── README.md
-```
-
----
-
-## How It Works
-### 1. **Fake Services**:
-   - Fake SSH Server on port 22
-   - Fake Telnet Server on port 23
-   - Fake FTP Server on port 21
-   - Logs connection attempts.
-
-### 2. **Logger**:
-   - Records each connection with the IP, service, and time.
-   
-### 3. **Dashboard**:
-   - Accessible on Pico's default IP (port 80).
-   - Displays connection details in an easy-to-read table.
+1. Clone the repo and enter the folder:
+    ```bash
+    git clone https://github.com/daxraj1976/iot-honeypot.git
+    cd iot-honeypot
+    ```
+2. Install deps:
+    ```bash
+    sudo apt install python3 python3-pip
+    pip3 install flask requests
+    ```
+3. Run it:
+    ```bash
+    python3 working_honeypot.py
+    ```
+4. Check the dashboard: [http://localhost:5050](http://localhost:5050)
 
 ---
 
-## Step-by-Step Setup
-
-### 1. Flash MicroPython to Pico W:
-   - Download MicroPython: [Micropython Pico W Firmware](https://micropython.org/)
-   - Flash using the official guide.
-
-### 2. Transfer Files:
-   - Upload all `.py` files to the Pico using `Thonny` IDE.
-
-### 3. Run the Honeypot:
-   - Use `Thonny` and execute `main.py`.
-
-### 4. Access the Dashboard:
-   - Open a browser and visit:
-     ```
-     http://<Pico-IP>/
-     ```
-   - Example: `192.168.4.1`
+## SSH "Interactive" Honeypot (Linux version)
+- Connect on port 2222 (e.g. `ssh <your-ip> -p 2222`)
+- Login prompt with username/password
+- After login, a fake bash prompt accepts commands such as `ls`, `pwd`, `whoami`, `uname`, `cat flag.txt`, `help`, `exit`
+- Everything is logged and visible on dashboard. No real commands are run. Safe for lab/education.
 
 ---
 
-## Example Logs
-### Serial Output:
-```
-[*] SSH honeypot listening on port 22
-[!] Fake SSH attempt detected from 192.168.0.56
-[+] Logged: SSH attempt from 192.168.0.56
-
-[*] Telnet honeypot listening on port 23
-[!] Fake Telnet attempt detected from 192.168.0.56
-[+] Logged: Telnet attempt from 192.168.0.56
-```
-
-### Dashboard View:
-| Time                | Service | IP           |
-|---------------------|---------|--------------|
-| 2026-07-18 10:10:10 | SSH     | 192.168.0.56 |
-| 2026-07-18 10:11:12 | Telnet  | 192.168.0.56 |
+## Quick Start (Raspberry Pi Pico W)
+- Flash with MicroPython.
+- Upload `main.py`, `fake_ssh_server.py`, `fake_telnet_server.py`, `fake_ftp_server.py`, and `web_dashboard.py` via Thonny.
+- Edit WiFi credentials in `main.py`.
+- Run. Visit Pico's IP in browser for logs.
 
 ---
 
-## Troubleshooting
-- **No Logs**: Check if your Pico is connected to the desired Wi-Fi Network.
-- **Dashboard Error**: Ensure `web_dashboard.py` is running.
-- **Unknown Issues**: Reset the Pico and reflash MicroPython.
+## Safety Notes
+- No real vulnerabilities. Banner and shell are always fake.
+- Use only in controlled/internal networks—never expose to the public/Internet.
 
 ---
 
-## Future Enhancements
-- Add malware emulation detection with dummy files.
-- Extend to support additional protocols (e.g., HTTP).
-- Enable cloud logging/dashboard.
-
----
-
-**Enjoy your IoT Honeypot!**
+## License
+MIT
