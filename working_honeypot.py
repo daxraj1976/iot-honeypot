@@ -62,64 +62,53 @@ def log_event(service, ip, details=''):
     print(f"[LOG] {service} from {ip} ({city}, {country}): {details}")
 
 # Honeypot Protocols
-class SSHHoneypot(asyncio.Protocol):
-    def __init__(self):
-        self.transport = None
-        self.state = 'banner'
-        self.ip = 'unknown'
-        self.username = ''
-        self.input_buffer = b''
-        self.logged_in = False
-        self.prompt = b'pi@raspberrypi:~$ '
-
-    def connection_made(self, transport):
-        self.transport = transport
-        peername = transport.get_extra_info('peername')
-        self.ip = peername[0] if peername else 'unknown'
-        log_event('SSH', self.ip, 'SSH connection start')
-        transport.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\n')
-        # Real SSH expects exchange, but we skip to login, for safety
-        transport.write(b'login: ')
-        self.state = 'username'
-
-    def data_received(self, data):
-        self.input_buffer += data
-        # Handle line-by-line input
-        if b'\n' in self.input_buffer or b'\r' in self.input_buffer:
-            line = self.input_buffer.strip().decode(errors='ignore')
-            self.input_buffer = b''
-            if self.state == 'username':
-                self.username = line
-                self.transport.write(b'Password: ')
-                self.state = 'password'
-            elif self.state == 'password':
-                self.transport.write(b'\r\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.4.0-42-generic x86_64)\r\n')
-                self.transport.write(self.prompt)
-                self.state = 'shell'
-                self.logged_in = True
-                log_event('SSH', self.ip, f'Login as {self.username}')
-            elif self.state == 'shell':
-                log_event('SSH', self.ip, f'{self.username}$ {line}')
-                output = self.simulate_command(line)
-                self.transport.write(output + self.prompt)
-
-    def simulate_command(self, line):
-        cmds = {
-            'ls': b"Desktop  Downloads  Documents  Music  Pictures  Public\n",
-            'pwd': b"/home/pi\n",
-            'whoami': (self.username+"\n").encode(),
-            'id': b"uid=1000(pi) gid=1000(pi) groups=1000(pi)\n",
-            'cat flag.txt': b"flag{honeypot_example_flag}\n",
-            'uname -a': b"Linux raspberrypi 5.4.0-42-generic #1 SMP x86_64 GNU/Linux\n",
-            'exit': b"logout\n",
-            'help': b"ls pwd whoami id cat uname exit help\n",
-        }
-        output = cmds.get(line.strip(), b"bash: command not found\n")
-        if line.strip() == 'exit':
-            # End session
-            self.transport.write(b'Connection closed by remote host.\n')
-            self.transport.close()
-        return output
+async def ssh_honeypot_handler(reader, writer):
+    ip = writer.get_extra_info('peername')[0]
+    log_event('SSH', ip, 'SSH connection start')
+    writer.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\n')
+    await writer.drain()
+    writer.write(b'login: ')
+    await writer.drain()
+    username = await reader.readline()
+    writer.write(b'Password: ')
+    await writer.drain()
+    password = await reader.readline()
+    writer.write(b'\r\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.4.0-42-generic x86_64)\r\n')
+    writer.write(b'pi@raspberrypi:~$ ')
+    await writer.drain()
+    log_event('SSH', ip, f"Login as {username.strip().decode(errors='ignore')}")
+    prompt = b'pi@raspberrypi:~$ '
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        cmd = line.decode().strip()
+        log_event('SSH', ip, f"{username.strip().decode(errors='ignore')}$ {cmd}")
+        # Respond to supported commands
+        if cmd == 'ls':
+            writer.write(b"Desktop  Downloads  Documents  Music  Pictures  Public\n")
+        elif cmd == 'pwd':
+            writer.write(b"/home/pi\n")
+        elif cmd == 'whoami':
+            writer.write(username.strip() + b"\n")
+        elif cmd == 'id':
+            writer.write(b"uid=1000(pi) gid=1000(pi) groups=1000(pi)\n")
+        elif cmd == 'cat flag.txt':
+            writer.write(b"flag{honeypot_example_flag}\n")
+        elif cmd == 'uname -a':
+            writer.write(b"Linux raspberrypi 5.4.0-42-generic #1 SMP x86_64 GNU/Linux\n")
+        elif cmd == 'help':
+            writer.write(b"ls pwd whoami id cat uname exit help\n")
+        elif cmd == 'exit':
+            writer.write(b"logout\nConnection closed by remote host.\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+        else:
+            writer.write(b"bash: command not found\n")
+        writer.write(prompt)
+        await writer.drain()
 
 class TelnetHoneypot(asyncio.Protocol):
     def connection_made(self, transport):
@@ -208,7 +197,7 @@ def run_flask():
 
 async def start_servers():
     # Start SSH server
-    ssh_server = await asyncio.start_server(SSHHoneypot, '0.0.0.0', SSH_PORT)
+    ssh_server = await asyncio.start_server(ssh_honeypot_handler, '0.0.0.0', SSH_PORT)
     print(f'SSH honeypot listening on 0.0.0.0:{SSH_PORT}')
     
     # Start Telnet server
