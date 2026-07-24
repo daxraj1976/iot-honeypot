@@ -1,11 +1,13 @@
 import geoip2.database
 import requests
 from flask import Flask, render_template_string, request
+from flask_socketio import SocketIO, emit
 from datetime import datetime
 import asyncio
 import socket
 
 app = Flask(__name__)
+socketio = SocketIO(app, async_mode='threading')
 LOGGED_EVENTS = []
 
 try:
@@ -35,17 +37,35 @@ def lookup_geoip(ip):
 def log_event(service, ip, extra=''):
     now = datetime.now().astimezone().strftime('%Y-%m-%d %H:%M:%S %Z')
     country, city = lookup_geoip(ip)
-    LOGGED_EVENTS.append({'time': now, 'service': service, 'ip': ip, 'country': country, 'city': city, 'extra': extra})
+    log = {'time': now, 'service': service, 'ip': ip, 'country': country, 'city': city, 'extra': extra}
+    LOGGED_EVENTS.append(log)
     print(f"[{service}] {ip} ({country}, {city}): {extra}")
+    socketio.emit('new_log', log)
 
 @app.route('/')
 def dashboard():
-    html = '''<html><head><title>Honeypot Dashboard</title></head><body><h1>Honeypot Logs</h1>'''
-    html += '''<table border='1'><tr><th>Time</th><th>Service</th><th>IP</th><th>Country</th><th>City</th><th>Extra</th></tr>'''
-    for log in LOGGED_EVENTS[-100:]:
-        html += f"<tr><td>{log['time']}</td><td>{log['service']}</td><td>{log['ip']}</td><td>{log['country']}</td><td>{log['city']}</td><td>{log['extra']}</td></tr>"
-    html += "</table></body></html>"
-    return html
+    return render_template_string('''
+<html><head><title>Honeypot Dashboard</title></head><body>
+<h1>Honeypot Logs (realtime)</h1>
+<table id="logtable" border='1'><tr><th>Time</th><th>Service</th><th>IP</th><th>Country</th><th>City</th><th>Extra</th></tr>
+{% for log in logs %}<tr><td>{{log.time}}</td><td>{{log.service}}</td><td>{{log.ip}}</td><td>{{log.country}}</td><td>{{log.city}}</td><td>{{log.extra}}</td></tr>{% endfor %}
+</table>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+<script>
+  var socket = io();
+  socket.on('new_log', function(log) {
+    var row = document.createElement('tr');
+    [log.time, log.service, log.ip, log.country, log.city, log.extra].forEach(function(txt) {
+      var td = document.createElement('td');
+      td.textContent = txt;
+      row.appendChild(td);
+    });
+    document.getElementById('logtable').appendChild(row);
+    window.scrollTo(0, document.body.scrollHeight);
+  });
+</script>
+</body></html>
+''', logs=LOGGED_EVENTS[-100:])
 
 SSH_PORT = 2222
 TELNET_PORT = 2323
@@ -185,7 +205,7 @@ async def start_servers():
 
     from threading import Thread
     def run_dashboard():
-        app.run(host="0.0.0.0", port=5050)
+        socketio.run(app, host="0.0.0.0", port=5050)
     Thread(target=run_dashboard, daemon=True).start()
 
     async with ssh, telnet, ftp:
