@@ -51,12 +51,53 @@ SSH_PORT = 2222
 TELNET_PORT = 2323
 FTP_PORT = 2121
 
-async def handle_client(reader, writer, service):
+FAKE_PROMPT = b"pi@raspberrypi:~$ "
+FAKE_RESPONSES = {
+    'ls': b"Desktop  Documents  Downloads  Music  Pictures  Public\n",
+    'pwd': b"/home/pi\n",
+    'whoami': b"pi\n",
+    'id': b"uid=1000(pi) gid=1000(pi) groups=1000(pi)\n",
+    'cat flag.txt': b"flag{honeypot_captured}\n",
+    'uname -a': b"Linux raspberrypi 5.4.0-42-generic #1 SMP x86_64 GNU/Linux\n",
+    'help': b"ls pwd whoami id cat flag.txt uname -a exit help\n",
+}
+
+def get_fake_response(cmd):
+    return FAKE_RESPONSES.get(cmd, b"bash: command not found\n")
+
+async def interactive_ssh(reader, writer):
+    ip = writer.get_extra_info('peername')[0]
+    log_event('SSH', ip, 'interactive connection')
+    writer.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\nlogin: ')
+    await writer.drain()
+    username = await reader.readline()
+    writer.write(b'Password: ')
+    await writer.drain()
+    password = await reader.readline()
+    log_event('SSH', ip, f'login={username.strip().decode(errors="ignore")}, password={password.strip().decode(errors="ignore")}')
+    writer.write(b'\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.4.0-42-generic x86_64)\n')
+    writer.write(FAKE_PROMPT)
+    await writer.drain()
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        cmd = line.decode().strip()
+        log_event('SSH', ip, f'shell: {cmd}')
+        if cmd == 'exit':
+            writer.write(b'logout\nConnection closed by remote host.\n')
+            await writer.drain()
+            break
+        writer.write(get_fake_response(cmd))
+        writer.write(FAKE_PROMPT)
+        await writer.drain()
+    writer.close()
+    await writer.wait_closed()
+
+async def handle_banner(reader, writer, service):
     ip = writer.get_extra_info('peername')[0]
     log_event(service, ip)
-    if service == 'SSH':
-        writer.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\n')
-    elif service == 'Telnet':
+    if service == 'Telnet':
         writer.write(b'Welcome to Telnet!\n')
     elif service == 'FTP':
         writer.write(b'220 (vsFTPd 3.0.3)\n')
@@ -65,12 +106,11 @@ async def handle_client(reader, writer, service):
     await writer.wait_closed()
 
 async def start_servers():
-    ssh = await asyncio.start_server(
-        lambda r, w: handle_client(r, w, 'SSH'), '0.0.0.0', SSH_PORT)
+    ssh = await asyncio.start_server(interactive_ssh, '0.0.0.0', SSH_PORT)
     telnet = await asyncio.start_server(
-        lambda r, w: handle_client(r, w, 'Telnet'), '0.0.0.0', TELNET_PORT)
+        lambda r, w: handle_banner(r, w, 'Telnet'), '0.0.0.0', TELNET_PORT)
     ftp = await asyncio.start_server(
-        lambda r, w: handle_client(r, w, 'FTP'), '0.0.0.0', FTP_PORT)
+        lambda r, w: handle_banner(r, w, 'FTP'), '0.0.0.0', FTP_PORT)
 
     print(f"SSH honeypot listening on 0.0.0.0:{SSH_PORT}")
     print(f"Telnet honeypot listening on 0.0.0.0:{TELNET_PORT}")
