@@ -51,32 +51,98 @@ SSH_PORT = 2222
 TELNET_PORT = 2323
 FTP_PORT = 2121
 
-FAKE_PROMPT = b"pi@raspberrypi:~$ "
-FAKE_RESPONSES = {
-    'ls': b"Desktop  Documents  Downloads  Music  Pictures  Public\n",
-    'pwd': b"/home/pi\n",
-    'whoami': b"pi\n",
-    'id': b"uid=1000(pi) gid=1000(pi) groups=1000(pi)\n",
-    'cat flag.txt': b"flag{honeypot_captured}\n",
-    'uname -a': b"Linux raspberrypi 5.4.0-42-generic #1 SMP x86_64 GNU/Linux\n",
-    'help': b"ls pwd whoami id cat flag.txt uname -a exit help\n",
-}
+import shlex
 
-def get_fake_response(cmd):
-    return FAKE_RESPONSES.get(cmd, b"bash: command not found\n")
+class FakeShellSession:
+    def __init__(self, username="pi"):
+        self.username = username
+        self.cwd = "/home/" + username
+        self.fs = {
+            "/home/"+username: ["Desktop", "Downloads", "Documents", "flag.txt"],
+            "/home/"+username+"/Desktop": [],
+            "/home/"+username+"/Downloads": [],
+            "/home/"+username+"/Documents": [],
+        }
+        self.files = {"/home/"+username+"/flag.txt": "flag{honeypot_captured}"}
+        self.history = []
+    def prompt(self):
+        return f"{self.username}@raspberrypi:{self.cwd.replace('/home/'+self.username, '~') if self.cwd.startswith('/home/'+self.username) else self.cwd}$ ".encode()
+    def handle_command(self, cmd):
+        self.history.append(cmd)
+        args = shlex.split(cmd)
+        if not args:
+            return b""
+        c = args[0]
+        # Directory commands
+        if c == "ls":
+            return ("  ".join(self.fs.get(self.cwd, [])) + "\n").encode()
+        elif c == "pwd":
+            return (self.cwd+"\n").encode()
+        elif c == "cd":
+            if len(args) < 2:
+                return b""
+            target = args[1]
+            if target == "..":
+                if self.cwd.count("/") > 2:
+                    self.cwd = "/".join(self.cwd.rstrip("/").split("/")[:-1])
+                return b""
+            elif target.startswith("/") and target in self.fs:
+                self.cwd = target
+                return b""
+            else:
+                path = self.cwd + "/" + target if not target.startswith("/") else target
+                if path in self.fs:
+                    self.cwd = path
+                    return b""
+                else:
+                    return f"bash: cd: {target}: No such file or directory\n".encode()
+        elif c == "touch" and len(args) > 1:
+            for fname in args[1:]:
+                if fname in self.fs.get(self.cwd, []):
+                    continue
+                self.fs[self.cwd].append(fname)
+                self.files[self.cwd+"/"+fname] = ""
+            return b""
+        elif c == "rm" and len(args) > 1:
+            for fname in args[1:]:
+                try:
+                    self.fs[self.cwd].remove(fname)
+                    self.files.pop(self.cwd+"/"+fname, None)
+                except Exception:
+                    return f"rm: cannot remove '{fname}': No such file or directory\n".encode()
+            return b""
+        elif c == "cat" and len(args) > 1:
+            fname = args[1]
+            content = self.files.get(self.cwd+"/"+fname)
+            if content is not None:
+                return (content+"\n").encode()
+            else:
+                return f"cat: {fname}: No such file or directory\n".encode()
+        elif c == "echo" and len(args) > 1:
+            text = " ".join(args[1:])
+            return (text+"\n").encode()
+        elif c == "history":
+            resp = "\n".join(f"{i+1}  {h}" for i, h in enumerate(self.history)) + "\n"
+            return resp.encode()
+        elif c == "help":
+            return b"ls pwd cd touch rm cat echo history help exit\n"
+        elif c == "exit":
+            return b""
+        return f"bash: {args[0]}: command not found\n".encode()
 
 async def interactive_ssh(reader, writer):
     ip = writer.get_extra_info('peername')[0]
-    log_event('SSH', ip, 'interactive connection')
     writer.write(b'SSH-2.0-OpenSSH_7.9p1 Debian-10\r\nlogin: ')
     await writer.drain()
     username = await reader.readline()
+    username = username.strip().decode(errors="ignore") or "pi"
     writer.write(b'Password: ')
     await writer.drain()
     password = await reader.readline()
-    log_event('SSH', ip, f'login={username.strip().decode(errors="ignore")}, password={password.strip().decode(errors="ignore")}')
+    log_event('SSH', ip, f'login={username}, password={password.strip().decode(errors="ignore")}')
     writer.write(b'\nWelcome to Ubuntu 20.04.6 LTS (GNU/Linux 5.4.0-42-generic x86_64)\n')
-    writer.write(FAKE_PROMPT)
+    shell = FakeShellSession(username)
+    writer.write(shell.prompt())
     await writer.drain()
     while True:
         line = await reader.readline()
@@ -84,12 +150,13 @@ async def interactive_ssh(reader, writer):
             break
         cmd = line.decode().strip()
         log_event('SSH', ip, f'shell: {cmd}')
-        if cmd == 'exit':
+        if cmd == "exit":
             writer.write(b'logout\nConnection closed by remote host.\n')
             await writer.drain()
             break
-        writer.write(get_fake_response(cmd))
-        writer.write(FAKE_PROMPT)
+        resp = shell.handle_command(cmd)
+        writer.write(resp)
+        writer.write(shell.prompt())
         await writer.drain()
     writer.close()
     await writer.wait_closed()
